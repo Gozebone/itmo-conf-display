@@ -5,7 +5,7 @@ from pygame.locals import *
 from insightface.app import FaceAnalysis
 from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteriaList, StoppingCriteria
 import torch
-from threading import Thread
+from threading import Thread, Event
 from queue import Queue
 from enum import Enum
 import time
@@ -112,6 +112,7 @@ def detect_face(app, frame):
 def face_prompt(face):
     age = int(face.age)
     gender = "Мужчина" if face.gender == 1 else "Женщина"
+    print(f"Detected Emotion: {face.emotion}")
     emotion = "Радость" if face.emotion == 0 else "Нейтрально"
     user_prompt = f"""
     Ты — духовный предсказатель на выставке. Напиши очень краткое (не более 2-3 предложений) вдохновляющее предсказание на день для этого человека.
@@ -123,7 +124,7 @@ def face_prompt(face):
     """
     return user_prompt
 
-def make_prediction():
+def make_prediction(stop_event):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     class StopOnTokens(StoppingCriteria):
         def __init__(self, stop_tokens):
@@ -149,7 +150,7 @@ def make_prediction():
 
     stopping_criteria = StoppingCriteriaList([StopOnTokens(stop_tokens)])
 
-    while True:
+    while not stop_event.is_set():
         prompt = prompt_queue.get()
         inputs = tokenizer(prompt, return_tensors="pt")
         inputs = inputs.to(device)
@@ -210,7 +211,8 @@ def main():
     if not cap:
         return 1
     app = init_insightface()
-    ai_thread = Thread(target=make_prediction)
+    stop_event = Event()
+    ai_thread = Thread(target=make_prediction, args=(stop_event,))
     ai_thread.start()
     status = Status.camera
     response = None
@@ -228,15 +230,18 @@ def main():
                     running = False
         if status == Status.camera:
             frame = get_frame(screen, cap)
-            numpy_frame = pygame_surface_to_numpy_bgr(frame)
-            face = detect_face(app, numpy_frame)
+            if frame:
+                numpy_frame = pygame_surface_to_numpy_bgr(frame)
+                face = detect_face(app, numpy_frame)
             
-            if face:
-                prompt = face_prompt(face)
-                prompt_queue.put(prompt)
-                start_time = time.time()
-                print("Loading")
-                status = Status.loading
+                if face:
+                    print(face.keys())
+                    prompt = face_prompt(face)
+                    print(prompt)
+                    prompt_queue.put(prompt)
+                    start_time = time.time()
+                    print("Loading")
+                    status = Status.loading
         elif status == Status.loading:
             frame = get_frame(screen, cap)
             display_text(LOADING, screen, font)
@@ -264,6 +269,7 @@ def main():
                 status = Status.camera
         pygame.display.flip()
         clock.tick(30)
+    stop_event.set()
     ai_thread.join()
     clear_pygame(cap)
 main() 
