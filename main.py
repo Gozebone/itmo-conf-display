@@ -11,7 +11,7 @@ from enum import Enum
 import time
 import random
 
-WIDTH, HEIGHT = 539, 960
+WIDTH, HEIGHT = 1920, 1080
 LOADING = "Loading..."
 FALLBACK_PREDICTIONS = [
     "Сегодня ваш день! Вселенная приготовила для вас приятный сюрприз. Будьте открыты новому!",
@@ -38,7 +38,7 @@ class Status(Enum):
 
 def init_insightface():
     app = FaceAnalysis(providers=['CUDAExecutionProvider'])
-    app.prepare(ctx_id=0, det_size=(640, 640)) # ctx_id=0 для CPU, укажите ctx_id=0 для GPU если он есть
+    app.prepare(ctx_id=0, det_size=(320, 320)) # ctx_id=0 для CPU, укажите ctx_id=0 для GPU если он есть
     return app
 
 def init_pygame():
@@ -104,7 +104,6 @@ def detect_face(app, frame):
         # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
 
         if (bbox[2] - bbox[0]) > 200:
-            print("face detected")
             return face
 
     return None
@@ -183,27 +182,33 @@ def get_frame(screen, cam):
     if cam.query_image():
         img = cam.get_image()
         
-        img_width, img_height = img.get_size()
-        crop_width = img_height * 9 // 16  # 9:16 aspect ratio
-        crop_x = (img_width - crop_width) // 2
+        # img_width, img_height = img.get_size()
+        # crop_width = img_height * 9 // 16  # 9:16 aspect ratio
+        # crop_x = (img_width - crop_width) // 2
         
-        cropped_img = img.subsurface(pygame.Rect(crop_x, 0, crop_width, img_height))
-        scaled_img = pygame.transform.smoothscale(cropped_img, (WIDTH, HEIGHT))
+        # cropped_img = img.subsurface(pygame.Rect(crop_x, 0, crop_width, img_height))
+        scaled_img = pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
         
         screen.blit(scaled_img, (0, 0))
         return scaled_img
 
     return None
 
-def display_text(text, screen, font):
-    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, 180))  # Black with alpha
-    screen.blit(overlay, (0, 0))
-    
-    wrapped_lines = wrap_text(text, font, WIDTH - 40) 
+def display_text(text, screen, font, overlay=True):
+    wrapped_lines = wrap_text(text, font, HEIGHT - 40) 
+    lines_height = len(wrapped_lines) * 40
+    first_line_location = (WIDTH - lines_height) // 2
+
+    if overlay:
+        overlay = pygame.Surface((lines_height + 40, HEIGHT), pygame.SRCALPHA, 32)
+        overlay.fill((0, 0, 0, 160))  # Black with alpha
+        screen.blit(overlay, (first_line_location - 20, 0))
     for i, line in enumerate(wrapped_lines):
         line_surface = font.render(line, True, (255, 255, 255))
-        screen.blit(line_surface, (20, 20 + i * 40))
+        rotated_line_surface = pygame.transform.rotate(line_surface, 90)
+        line_width, _ = font.size(line)
+        center_position = (HEIGHT - line_width) // 2
+        screen.blit(rotated_line_surface, (first_line_location + i * 40, center_position))
         
 def main():
     screen, font = init_pygame()
@@ -212,8 +217,8 @@ def main():
         return 1
     app = init_insightface()
     stop_event = Event()
-    ai_thread = Thread(target=make_prediction, args=(stop_event,))
-    ai_thread.start()
+    # ai_thread = Thread(target=make_prediction, args=(stop_event,))
+    # ai_thread.start()
     status = Status.camera
     response = None
     start_time = None
@@ -230,46 +235,57 @@ def main():
                     running = False
         if status == Status.camera:
             frame = get_frame(screen, cap)
-            if frame:
-                numpy_frame = pygame_surface_to_numpy_bgr(frame)
-                face = detect_face(app, numpy_frame)
-            
-                if face:
-                    print(face.keys())
-                    prompt = face_prompt(face)
-                    print(prompt)
-                    prompt_queue.put(prompt)
-                    start_time = time.time()
-                    print("Loading")
-                    status = Status.loading
+            numpy_frame = pygame_surface_to_numpy_bgr(frame)
+            face = detect_face(app, numpy_frame)
+        
+            if face:
+                bbox = face.bbox
+                print(bbox)
+                pygame.draw.rect(screen, color=(255,255,255), rect=(0,0,100,100), width=5, border_radius=1)
+                # pygame.draw.rect(screen, color=(255,255,255), rect=(bbox[0], bbox[1], abs(bbox[2]-bbox[0]), abs(bbox[3]-bbox[1])), width=5, border_radius=1)
+                # print(face.keys())
+                # prompt = face_prompt(face)
+                # print(prompt)
+                # prompt_queue.put(prompt)
+                start_time = time.time()
+                print("Loading")
+                status = Status.loading
         elif status == Status.loading:
             frame = get_frame(screen, cap)
-            display_text(LOADING, screen, font)
+            display_text(LOADING, screen, font, overlay=False)
+            numpy_frame = pygame_surface_to_numpy_bgr(frame)
+            face = detect_face(app, numpy_frame)
+        
+            if face:
+                bbox = face.bbox
+                rect = tuple(map(int, (bbox[0], bbox[1], abs(bbox[2]-bbox[0]), abs(bbox[3]-bbox[1]))))
+                
+                pygame.draw.rect(screen, color=(255,255,255), rect=rect, width=5, border_radius=1)
             if not response_queue.empty():
                 response = response_queue.get_nowait()
                 start_time = time.time()
                 print("Ready")
                 status = Status.ready
-            elif time.time() - start_time > 30:
+            elif time.time() - start_time > 5:
                 start_time = time.time()
                 random_fallback_text = random.choice(FALLBACK_PREDICTIONS)
                 print("Skip ready")
                 status = Status.error
         elif status == Status.ready:
             frame = get_frame(screen, cap)
-            display_text(response, screen, font)
+            display_text(response, screen, font, overlay=True)
             if time.time() - start_time > 10:
                 print("Camera")
                 status = Status.camera
         elif status == Status.error:
             frame = get_frame(screen, cap)
-            display_text(random_fallback_text, screen, font)
+            display_text(random_fallback_text, screen, font, overlay=True)
             if time.time() - start_time > 10:
                 print("Camera")
                 status = Status.camera
         pygame.display.flip()
-        clock.tick(30)
+        clock.tick(24)
     stop_event.set()
-    ai_thread.join()
+    # ai_thread.join()
     clear_pygame(cap)
 main() 
